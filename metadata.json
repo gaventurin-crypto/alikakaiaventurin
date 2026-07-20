@@ -1,0 +1,6 @@
+{
+  "name": "گالری آونتورین",
+  "description": "فروشگاه آنلاین و تخصصی بدلیجات و اکسسوری‌های لوکس و مدرن آونتورین با درگاه پرداخت امن و پنل مدیریت پیشرفته",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

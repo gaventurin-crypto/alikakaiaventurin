@@ -1,0 +1,9 @@
+[variables]
+NODE_VERSION = "20"
+NPM_CONFIG_ENGINE_STRICT = "false"
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
