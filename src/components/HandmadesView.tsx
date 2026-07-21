@@ -2,9 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles, Upload, MessageCircle, CheckCircle2, DollarSign,
   Clock, ArrowRight, Send, Trash2, ShieldCheck, CreditCard, ChevronLeft,
-  Paperclip, Info, AlertCircle, ShoppingBag, Eye, User
+  Paperclip, Info, AlertCircle, ShoppingBag, Eye, User, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import ConfirmModal, { ConfirmDialogConfig } from './ConfirmModal';
 import { api } from '../lib/api';
 import { formatPersianPrice, formatPersianNumber } from './ProductCard';
 
@@ -59,6 +60,16 @@ export default function HandmadesView({
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const pollingIntervalRef = useRef<any>(null);
+
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogConfig | null>(null);
+
+  const triggerToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    if (typeof window !== 'undefined' && typeof (window as any).showToast === 'function') {
+      (window as any).showToast(message, type);
+    } else {
+      console[type === 'error' ? 'error' : 'log'](message);
+    }
+  };
 
   // Fetch initial data
   useEffect(() => {
@@ -162,7 +173,7 @@ export default function HandmadesView({
           setFormImageBase64(base64);
         }
       } catch (err) {
-        alert("خطا در خواندن فایل تصویر. لطفا تصویر دیگری انتخاب کنید.");
+        triggerToast("خطا در خواندن فایل تصویر. لطفا تصویر دیگری انتخاب کنید.", 'error');
       }
     }
   };
@@ -187,7 +198,7 @@ export default function HandmadesView({
         const base64 = await convertToBase64(e.dataTransfer.files[0]);
         setFormImageBase64(base64);
       } catch (err) {
-        alert("خطا در پردازش تصویر کشیده شده.");
+        triggerToast("خطا در پردازش تصویر کشیده شده.", 'error');
       }
     }
   };
@@ -200,7 +211,7 @@ export default function HandmadesView({
     }
 
     if (!formDescription.trim()) {
-      alert("لطفاً توضیحات زیورآلات سفارشی درخواستی خود را تشریح کنید.");
+      triggerToast("لطفاً توضیحات زیورآلات سفارشی درخواستی خود را تشریح کنید.", 'error');
       return;
     }
 
@@ -227,7 +238,7 @@ export default function HandmadesView({
         setActiveTab('my-orders');
       }, 2000);
     } catch (err: any) {
-      alert(err.message || "خطا در ثبت سفارش دست‌ساز جدید.");
+      triggerToast(err.message || "خطا در ثبت سفارش دست‌ساز جدید.", 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -245,33 +256,40 @@ export default function HandmadesView({
       // Force instant refresh
       await refreshSelectedOrder(selectedOrder.id);
     } catch (err: any) {
-      alert(err.message || "خطا در ارسال پیام.");
+      triggerToast(err.message || "خطا در ارسال پیام.", 'error');
     } finally {
       setChatLoading(false);
     }
   };
 
   const handleAcceptPrice = async (orderId: string) => {
-    if (confirm("آیا از تایید قیمت پیشنهادی کارشناس گالری اطمینان دارید؟ پس از تایید می‌توانید هزینه ساخت را به صورت آنلاین پرداخت کنید.")) {
-      try {
-        await api.acceptCustomOrderPrice(orderId);
-        alert("✓ قیمت با موفقیت تایید شد. اکنون می‌توانید نسبت به پرداخت آنلاین هزینه اقدام کنید.");
-        await refreshSelectedOrder(orderId);
-      } catch (err: any) {
-        alert(err.message || "خطا در تایید قیمت.");
+    setConfirmDialog({
+      title: 'تایید قیمت پیشنهادی',
+      message: 'آیا از تایید قیمت پیشنهادی کارشناس گالری اطمینان دارید؟ پس از تایید می‌توانید هزینه ساخت را به صورت آنلاین پرداخت کنید.',
+      onConfirm: async () => {
+        try {
+          await api.acceptCustomOrderPrice(orderId);
+          triggerToast('✓ قیمت با موفقیت تایید شد. اکنون می‌توانید نسبت به پرداخت آنلاین هزینه اقدام کنید.', 'success');
+          await refreshSelectedOrder(orderId);
+        } catch (err: any) {
+          triggerToast(err.message || 'خطا در تایید قیمت.', 'error');
+        } finally {
+          setConfirmDialog(null);
+        }
       }
-    }
+    });
   };
 
   const handlePayOrder = async (orderId: string) => {
     try {
       await api.payCustomOrder(orderId);
-      alert("✓ شبیه‌ساز پرداخت ZarinPal موفقیت‌آمیز بود! فرآیند ساخت زیورآلات سفارشی شما در کارگاه مرکزی آغاز شد.");
+      triggerToast("✓ شبیه‌ساز پرداخت ZarinPal موفقیت‌آمیز بود! فرآیند ساخت زیورآلات سفارشی شما در کارگاه مرکزی آغاز شد.", 'success');
       await refreshSelectedOrder(orderId);
     } catch (err: any) {
-      alert(err.message || "خطا در پرداخت سفارشی.");
+      triggerToast(err.message || "خطا در پرداخت سفارشی.", 'error');
     }
   };
+
 
   // Helper translations for technical metadata labels
   const translateMaterial = (mat: string) => {
@@ -957,6 +975,8 @@ export default function HandmadesView({
         )}
 
       </AnimatePresence>
+
+      <ConfirmModal confirmDialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
     </div>
   );

@@ -63,10 +63,16 @@ const MongoCategory: any = mongoose.models.Category || mongoose.model('Category'
 const UserSchema = new Schema({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
+  lastName: { type: String, default: '' },
   email: { type: String, required: true, unique: true, lowercase: true },
   passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['admin', 'user'], default: 'user' },
-  status: { type: String, enum: ['active', 'blocked'], default: 'active' }
+  role: { type: String, enum: ['admin', 'user', 'superadmin'], default: 'user' },
+  status: { type: String, enum: ['active', 'blocked'], default: 'active' },
+  phone: { type: String, default: '' },
+  address: { type: String, default: '' },
+  postalCode: { type: String, default: '' },
+  birthDate: { type: String, default: '' },
+  points: { type: Number, default: 0 }
 });
 
 const MongoUser: any = mongoose.models.User || mongoose.model('User', UserSchema);
@@ -82,6 +88,7 @@ const OrderItemSchema = new Schema({
 
 const OrderSchema = new Schema({
   id: { type: String, required: true, unique: true },
+  userId: { type: String, required: false },
   customerName: { type: String, required: true },
   customerPhone: { type: String, required: true },
   province: { type: String, required: true },
@@ -90,6 +97,11 @@ const OrderSchema = new Schema({
   address: { type: String, required: true },
   items: [OrderItemSchema],
   totalPrice: { type: Number, required: true },
+  discountAmount: { type: Number, default: 0 },
+  shippingCost: { type: Number, default: 0 },
+  tax: { type: Number, default: 0 },
+  couponCode: { type: String, required: false },
+  shippingMethod: { type: String, default: 'post' },
   paymentStatus: { type: String, required: true },
   trackingCode: { type: String, required: true },
   date: { type: String, required: true }

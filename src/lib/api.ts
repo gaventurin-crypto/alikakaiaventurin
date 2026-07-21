@@ -38,14 +38,25 @@ async function request<T>(endpoint: string, options: RequestInit = {}, retries =
       let data: any;
 
       if (contentType && contentType.includes('application/json')) {
-        data = await response.json();
+        try {
+          data = await response.json();
+        } catch (jsonErr: any) {
+          const error = new Error(`خطا در خواندن پاسخ JSON از سرور: ${jsonErr.message}`) as any;
+          error.status = response.status;
+          throw error;
+        }
       } else {
         const text = await response.text();
-        throw new Error(`پاسخ سرور در قالب JSON نبود (کد ${response.status}). متن پاسخ: ${text.slice(0, 100)}`);
+        const error = new Error(`پاسخ سرور در قالب JSON نبود (کد ${response.status}). متن پاسخ: ${text.slice(0, 100)}`) as any;
+        error.status = response.status;
+        throw error;
       }
 
       if (!response.ok) {
-        throw new Error(data.message || 'خطایی در ارتباط با سرور رخ داده است.');
+        const errorMessage = data?.message || `خطایی در ارتباط با سرور رخ داده است. کد ${response.status}`;
+        const error = new Error(errorMessage) as any;
+        error.status = response.status;
+        throw error;
       }
 
       return data as T;
@@ -73,7 +84,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}, retries =
 
 // Helper to check response status from custom errors
 function responseHasStatus(error: any, statuses: number[]): boolean {
-  if (error && error.status && statuses.includes(error.status)) return true;
+  if (!error) return false;
+  if (typeof error.status === 'number' && statuses.includes(error.status)) return true;
+  if (error.response && typeof error.response.status === 'number' && statuses.includes(error.response.status)) return true;
   return false;
 }
 
@@ -258,7 +271,7 @@ export const api = {
 
   // Zarinpal Gateway Creation & Verification
   async createPaymentSession(amount: number, couponCode: string | null, items: any[], customerData: any) {
-    return request<{ authority: string; paymentUrl: string; orderId: string }>('/payment/create', {
+    return request<{ authority: string; paymentUrl: string; orderId: string; amount: number; couponCode?: string }>('/payment/create', {
       method: 'POST',
       body: JSON.stringify({ amount, couponCode, items, customerData }),
     });

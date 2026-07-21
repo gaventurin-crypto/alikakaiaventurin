@@ -5,6 +5,7 @@ import {
   X, Send, Paperclip, CheckCircle2, ShieldCheck, Mail, Info, Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import ConfirmModal, { ConfirmDialogConfig } from './ConfirmModal';
 import { api } from '../lib/api';
 import { formatPersianPrice, formatPersianNumber } from './ProductCard';
 
@@ -42,6 +43,16 @@ export default function AdminHandmades() {
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const pollingIntervalRef = useRef<any>(null);
+
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogConfig | null>(null);
+
+  const triggerToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    if (typeof window !== 'undefined' && typeof (window as any).showToast === 'function') {
+      (window as any).showToast(message, type);
+    } else {
+      console[type === 'error' ? 'error' : 'log'](message);
+    }
+  };
 
   // Image presets
   const samplePresets = [
@@ -144,7 +155,7 @@ export default function AdminHandmades() {
         const base64 = await convertToBase64(files[0]);
         setChatImageBase64(base64);
       } catch (err) {
-        alert("خطا در پردازش تصویر ضمیمه.");
+        triggerToast("خطا در پردازش تصویر ضمیمه.", 'error');
       }
     }
   };
@@ -152,7 +163,7 @@ export default function AdminHandmades() {
   const handleSampleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sampleTitle || !samplePrice) {
-      alert("لطفا فیلدهای الزامی را مقداردهی کنید.");
+      triggerToast("لطفا فیلدهای الزامی را مقداردهی کنید.", 'error');
       return;
     }
 
@@ -170,15 +181,15 @@ export default function AdminHandmades() {
     try {
       if (editingSampleId) {
         await api.editSampleItem(editingSampleId, payload);
-        alert("✓ نمونه‌کار با موفقیت ویرایش شد.");
+        triggerToast("✓ نمونه‌کار با موفقیت ویرایش شد.", 'success');
       } else {
         await api.addSampleItem(payload);
-        alert("✓ نمونه‌کار جدید به کاتالوگ سفارشی اضافه شد.");
+        triggerToast("✓ نمونه‌کار جدید به کاتالوگ سفارشی اضافه شد.", 'success');
       }
       resetSampleForm();
       fetchSamples();
     } catch (err: any) {
-      alert(err.message || "خطا در ثبت نمونه‌کار.");
+      triggerToast(err.message || "خطا در ثبت نمونه‌کار.", 'error');
     }
   };
 
@@ -195,16 +206,22 @@ export default function AdminHandmades() {
     setIsEditingSample(true);
   };
 
-  const handleDeleteSample = async (id: string) => {
-    if (confirm("آیا از حذف این نمونه‌کار سفارشی مطمئن هستید؟ این عمل غیرقابل بازگشت است.")) {
-      try {
-        await api.deleteSampleItem(id);
-        alert("نمونه‌کار انتخابی با موفقیت حذف گردید.");
-        fetchSamples();
-      } catch (err: any) {
-        alert(err.message || "خطا در حذف نمونه‌کار.");
+  const handleDeleteSample = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف نمونه‌کار سفارشی',
+      message: 'آیا از حذف این نمونه‌کار سفارشی مطمئن هستید؟ این عمل غیرقابل بازگشت است.',
+      onConfirm: async () => {
+        try {
+          await api.deleteSampleItem(id);
+          triggerToast('نمونه‌کار انتخابی با موفقیت حذف گردید.', 'success');
+          fetchSamples();
+        } catch (err: any) {
+          triggerToast(err.message || 'خطا در حذف نمونه‌کار.', 'error');
+        } finally {
+          setConfirmDialog(null);
+        }
       }
-    }
+    });
   };
 
   const resetSampleForm = () => {
@@ -226,24 +243,30 @@ export default function AdminHandmades() {
 
     try {
       await api.addSampleCategory(newCatName.trim());
-      alert("✓ دسته‌بندی جدید ثبت شد.");
+      triggerToast("✓ دسته‌بندی جدید ثبت شد.", 'success');
       setNewCatName('');
       fetchSamples();
     } catch (err: any) {
-      alert(err.message || "خطا در افزودن دسته‌بندی.");
+      triggerToast(err.message || "خطا در افزودن دسته‌بندی.", 'error');
     }
   };
 
-  const handleDeleteSampleCategory = async (id: string) => {
-    if (confirm("آیا از حذف این دسته‌بندی دست‌ساز مطمئن هستید؟")) {
-      try {
-        await api.deleteSampleCategory(id);
-        alert("دسته‌بندی با موفقیت حذف شد.");
-        fetchSamples();
-      } catch (err: any) {
-        alert(err.message || "خطا در حذف دسته‌بندی.");
+  const handleDeleteSampleCategory = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف دسته‌بندی دست‌ساز',
+      message: 'آیا از حذف این دسته‌بندی دست‌ساز مطمئن هستید؟',
+      onConfirm: async () => {
+        try {
+          await api.deleteSampleCategory(id);
+          triggerToast('دسته‌بندی با موفقیت حذف شد.', 'success');
+          fetchSamples();
+        } catch (err: any) {
+          triggerToast(err.message || 'خطا در حذف دسته‌بندی.', 'error');
+        } finally {
+          setConfirmDialog(null);
+        }
       }
-    }
+    });
   };
 
   const handleSendChatMessage = async (e: React.FormEvent) => {
@@ -257,11 +280,12 @@ export default function AdminHandmades() {
       setChatImageBase64('');
       await refreshSelectedOrder(selectedOrder.id);
     } catch (err: any) {
-      alert(err.message || "خطا در ارسال پیام.");
+      triggerToast(err.message || "خطا در ارسال پیام.", 'error');
     } finally {
       setChatLoading(false);
     }
   };
+
 
   const handleUpdatePrice = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -269,10 +293,10 @@ export default function AdminHandmades() {
 
     try {
       await api.updateCustomOrderPrice(selectedOrder.id, Number(adminPriceInput));
-      alert(`✓ قیمت برآوردی ${formatPersianPrice(Number(adminPriceInput))} روی فاکتور ثبت شد و فاکتور به عنوان صادر شده تغییر یافت.`);
+      triggerToast(`✓ قیمت برآوردی ${formatPersianPrice(Number(adminPriceInput))} روی فاکتور ثبت شد و فاکتور به عنوان صادر شده تغییر یافت.`, 'success');
       await refreshSelectedOrder(selectedOrder.id);
     } catch (err: any) {
-      alert(err.message || "خطا در صدور قیمت.");
+      triggerToast(err.message || "خطا در صدور قیمت.", 'error');
     }
   };
 
@@ -280,10 +304,10 @@ export default function AdminHandmades() {
     if (!selectedOrder) return;
     try {
       await api.updateCustomOrderStatus(selectedOrder.id, status);
-      alert(`وضعیت سفارش به "${status}" تغییر یافت.`);
+      triggerToast(`وضعیت سفارش به "${status}" تغییر یافت.`, 'success');
       await refreshSelectedOrder(selectedOrder.id);
     } catch (err: any) {
-      alert(err.message || "خطا در به‌روزرسانی وضعیت.");
+      triggerToast(err.message || "خطا در به‌روزرسانی وضعیت.", 'error');
     }
   };
 
@@ -851,6 +875,8 @@ export default function AdminHandmades() {
         )}
 
       </AnimatePresence>
+
+      <ConfirmModal confirmDialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
 
     </div>
   );

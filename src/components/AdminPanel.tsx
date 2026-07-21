@@ -10,6 +10,7 @@ import { Product, Order, Coupon } from '../types';
 import { formatPersianPrice, formatPersianNumber } from './ProductCard';
 import { api } from '../lib/api';
 import AdminHandmades from './AdminHandmades';
+import ConfirmModal, { ConfirmDialogConfig } from './ConfirmModal';
 import { ProductImageGalleryManager } from './ProductImageGalleryManager';
 
 interface AdminPanelProps {
@@ -96,11 +97,7 @@ export default function AdminPanel({
 
   // --- LUXURY NOTIFICATION & CONFIRMATION STATES ---
   const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: 'success' | 'error' | 'info' }>>([]);
-  const [confirmModal, setConfirmModal] = useState<{
-    title: string;
-    message: string;
-    onConfirm: () => void;
-  } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogConfig | null>(null);
 
   // Mobile Layout states
   const [isMobileTabMenuOpen, setIsMobileTabMenuOpen] = useState(false);
@@ -233,14 +230,21 @@ export default function AdminPanel({
   };
 
   const handleDeleteUserSubmit = async (userId: string) => {
-    if (!window.confirm('آیا از حذف دائم این کاربر اطمینان دارید؟ تمام سوابق و سفارشات مرتبط حذف خواهند شد.')) return;
-    try {
-      await api.deleteAdminUser(userId);
-      triggerToast('کاربر با موفقیت از سیستم حذف گردید.', 'success');
-      onUpdateUser('', { refreshOnly: true });
-    } catch (err: any) {
-      triggerToast(err.message || 'خطا در حذف کاربر.', 'error');
-    }
+    setConfirmModal({
+      title: 'حذف دائم کاربر',
+      message: 'آیا از حذف دائم این کاربر اطمینان دارید؟ تمام سوابق و سفارشات مرتبط حذف خواهند شد.',
+      onConfirm: async () => {
+        try {
+          await api.deleteAdminUser(userId);
+          triggerToast('کاربر با موفقیت از سیستم حذف گردید.', 'success');
+          onUpdateUser('', { refreshOnly: true });
+        } catch (err: any) {
+          triggerToast(err.message || 'خطا در حذف کاربر.', 'error');
+        } finally {
+          setConfirmModal(null);
+        }
+      }
+    });
   };
 
   const handlePointsChangeSubmit = async (userId: string, newPoints: number) => {
@@ -3358,50 +3362,10 @@ export default function AdminPanel({
           )}
         </AnimatePresence>
 
-        {/* ================= OVERLAYS: 1. CONFIRMATION MODAL ================= */}
-        <AnimatePresence>
-          {confirmModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 0.6 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setConfirmModal(null)}
-                className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-              />
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                className="relative w-full max-w-sm rounded-3xl bg-slate-900 border border-slate-850 p-6 shadow-2xl text-right space-y-4 z-10"
-              >
-                <div className="h-10 w-10 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
-                  <Trash2 size={20} />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="text-sm font-black text-slate-100">{confirmModal.title}</h4>
-                  <p className="text-xs text-slate-400 leading-relaxed">{confirmModal.message}</p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      confirmModal.onConfirm();
-                    }}
-                    className="flex-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold py-2.5 text-xs transition-colors cursor-pointer"
-                  >
-                    تایید و حذف دائم
-                  </button>
-                  <button
-                    onClick={() => setConfirmModal(null)}
-                    className="flex-1 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-400 py-2.5 text-xs transition-colors cursor-pointer"
-                  >
-                    انصراف
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
+        <ConfirmModal
+          confirmDialog={confirmModal}
+          onClose={() => setConfirmModal(null)}
+        />
 
       {/* ================= OVERLAYS: 2. PREMIUM TOAST STACK ================= */}
       <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-96 z-50 space-y-2 pointer-events-none">

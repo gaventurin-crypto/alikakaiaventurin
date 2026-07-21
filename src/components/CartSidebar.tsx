@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { X, ShoppingBag, Plus, Minus, Trash2, ArrowLeft, Send, MapPin, Phone, User, Hash, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CartItem, Product } from '../types';
+import { CartItem, Product, Coupon } from '../types';
 import { formatPersianPrice, formatPersianNumber } from './ProductCard';
 import { PROVINCES } from '../data';
+import { api } from '../lib/api';
+import { getCartSubtotal, getCouponDiscount, getShippingCost, getTaxAmount, getCartTotal } from '../lib/checkoutUtils';
 
 interface CartSidebarProps {
   isOpen: boolean;
   onClose: () => void;
   cartItems: CartItem[];
+  coupons: Coupon[];
   onUpdateQuantity: (productId: string, variant: string, change: number) => void;
   onRemoveItem: (productId: string, variant: string) => void;
   onProceedToPayment: (customerData: {
@@ -18,19 +21,30 @@ interface CartSidebarProps {
     city: string;
     postalCode: string;
     address: string;
+    shippingMethod: 'post' | 'express';
+    appliedCouponCode?: string;
   }) => void;
+  shippingCostSetting?: number;
+  taxPercent?: number;
 }
 
 export default function CartSidebar({
   isOpen,
   onClose,
   cartItems,
+  coupons,
   onUpdateQuantity,
   onRemoveItem,
   onProceedToPayment,
+  shippingCostSetting,
+  taxPercent,
 }: CartSidebarProps) {
   const [step, setStep] = useState<'cart' | 'checkout'>('cart');
   const [errorMsg, setErrorMsg] = useState('');
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponError, setCouponError] = useState('');
+  const [isCouponLoading, setIsCouponLoading] = useState(false);
   
   // Checkout Form State
   const [name, setName] = useState('');
@@ -39,9 +53,36 @@ export default function CartSidebar({
   const [selectedCity, setSelectedCity] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [address, setAddress] = useState('');
+  const [shippingMethod, setShippingMethod] = useState<'post' | 'express'>('post');
 
   // Dynamically populated cities based on province selection
   const availableCities = PROVINCES.find((p) => p.name === selectedProvince)?.cities || [];
+
+  const handleApplyCoupon = async () => {
+    setCouponError('');
+    const trimmed = couponInput.trim().toUpperCase();
+    if (!trimmed) {
+      setCouponError('لطفاً ابتدا کد تخفیف را وارد کنید.');
+      return;
+    }
+
+    setIsCouponLoading(true);
+    try {
+      const validated = await api.validateCoupon(trimmed);
+      setAppliedCoupon(validated);
+      setCouponInput('');
+    } catch (err: any) {
+      setCouponError(err?.message || 'این کد تخفیف معتبر نمی‌باشد.');
+      setAppliedCoupon(null);
+    } finally {
+      setIsCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponError('');
+  };
 
   // Reset form steps and errors when sidebar opens or closes
   useEffect(() => {
@@ -51,16 +92,11 @@ export default function CartSidebar({
     }
   }, [isOpen]);
 
-  const subtotal = cartItems.reduce((sum, item) => {
-    const hasDiscount = item.product.discount && item.product.discount > 0;
-    const finalPrice = hasDiscount
-      ? item.product.price * (1 - (item.product.discount || 0) / 100)
-      : item.product.price;
-    return sum + finalPrice * item.quantity;
-  }, 0);
-
-  const shippingCost = subtotal >= 500000 || subtotal === 0 ? 0 : 35000;
-  const total = subtotal + shippingCost;
+  const subtotal = getCartSubtotal(cartItems);
+  const discountAmount = getCouponDiscount(subtotal, appliedCoupon);
+  const shippingCost = getShippingCost(subtotal, shippingMethod, shippingCostSetting ?? 35000);
+  const taxAmount = getTaxAmount(subtotal, discountAmount, taxPercent ?? 9);
+  const total = getCartTotal(subtotal, discountAmount, shippingCost, taxAmount);
 
   // Free shipping progress
   const freeShippingThreshold = 500000;
@@ -100,6 +136,8 @@ export default function CartSidebar({
       city: selectedCity,
       postalCode,
       address,
+      shippingMethod,
+      appliedCouponCode: appliedCoupon?.code,
     });
   };
 
@@ -371,6 +409,67 @@ export default function CartSidebar({
                       className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-gold-500 transition-all text-left placeholder:text-slate-600 font-mono"
                       dir="ltr"
                     />
+                  </div>
+
+                  {/* Coupon Code */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">کد تخفیف (اختیاری)</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={couponInput}
+                        onChange={(e) => { setCouponError(''); setCouponInput(e.target.value); }}
+                        placeholder="مثال: AVENTURIN1405"
+                        className="flex-1 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-gold-500 transition-all uppercase"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleApplyCoupon}
+                        disabled={isCouponLoading}
+                        className="rounded-xl bg-gold-500 hover:bg-gold-400 disabled:cursor-not-allowed disabled:opacity-60 text-slate-950 px-4 py-3 text-sm font-bold transition-all"
+                      >
+                        {isCouponLoading ? 'در حال بررسی...' : 'اعمال'}
+                      </button>
+                    </div>
+                    {couponError && <p className="mt-2 text-[11px] text-rose-400">{couponError}</p>}
+                    {appliedCoupon && (
+                      <div className="mt-2 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 p-3 text-[11px] text-emerald-200 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-bold text-emerald-200">کد تخفیف فعال شد</p>
+                          <p className="text-slate-300 text-[10px]">{appliedCoupon.code} - {appliedCoupon.type === 'percent' ? `${appliedCoupon.value}%` : formatPersianPrice(appliedCoupon.value)} تخفیف</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveCoupon}
+                          className="text-[11px] font-semibold text-slate-100 underline"
+                        >
+                          حذف
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Shipping Method */}
+                  <div>
+                    <span className="block text-xs font-semibold text-slate-400 mb-2">روش ارسال سفارش *</span>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShippingMethod('post')}
+                        className={`rounded-2xl border px-4 py-3 text-left text-sm transition-all ${shippingMethod === 'post' ? 'border-gold-500 bg-gold-500/10 text-gold-200' : 'border-slate-800 bg-slate-950 text-slate-300'}`}
+                      >
+                        <span className="font-semibold">پست پیشتاز</span>
+                        <p className="text-[10px] text-slate-500 mt-1">ارسال استاندارد</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShippingMethod('express')}
+                        className={`rounded-2xl border px-4 py-3 text-left text-sm transition-all ${shippingMethod === 'express' ? 'border-gold-500 bg-gold-500/10 text-gold-200' : 'border-slate-800 bg-slate-950 text-slate-300'}`}
+                      >
+                        <span className="font-semibold">پیک اکسپرس</span>
+                        <p className="text-[10px] text-slate-500 mt-1">ارسال سریع‌تر با هزینه بیشتر</p>
+                      </button>
+                    </div>
                   </div>
 
                   {/* Address */}

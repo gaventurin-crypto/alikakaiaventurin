@@ -49,6 +49,7 @@ export interface Order {
   paymentStatus: 'pending' | 'paid' | 'failed' | 'success';
   shippingStatus?: 'pending' | 'processing' | 'shipped' | 'delivered';
   couponCode?: string;
+  shippingMethod?: 'post' | 'express' | string;
   createdAt?: string;
   date?: string;
   paymentGateway?: string;

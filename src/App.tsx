@@ -29,10 +29,13 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 import AdminPanel from './components/AdminPanel';
 import UserPages from './components/UserPages';
+import CartSidebar from './components/CartSidebar';
 import PaymentGateway from './components/PaymentGateway';
+import ConfirmModal, { ConfirmDialogConfig } from './components/ConfirmModal';
 import { Product, CartItem, Order, Coupon } from './types';
 import { formatPersianPrice, formatPersianNumber } from './components/ProductCard';
 import { api } from './lib/api';
+import { getCartSubtotal, getCouponDiscount, getShippingCost, getTaxAmount, getCartTotal } from './lib/checkoutUtils';
 
 export default function App() {
   // Core e-commerce states fetched from backend
@@ -97,6 +100,7 @@ export default function App() {
     customerName: string;
     totalAmount: number;
   } | null>(null);
+  const [isCartSidebarOpen, setIsCartSidebarOpen] = useState(false);
 
   interface ToastItem {
     id: string;
@@ -104,6 +108,7 @@ export default function App() {
     type: 'success' | 'error' | 'info';
   }
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogConfig | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = Math.random().toString();
@@ -158,8 +163,41 @@ export default function App() {
     }
   };
 
+  const handlePaymentRedirectVerification = async (authority: string, status: 'OK' | 'FAIL') => {
+    try {
+      const result = await api.verifyPayment(authority, status);
+
+      if (result.status === 'success') {
+        saveCartToStorage([]);
+        setSuccessOrder({
+          trackingCode: result.order?.trackingCode || authority,
+          customerName: result.order?.customerName || currentUser?.name || 'خریدار محترم',
+          totalAmount: result.order?.totalPrice ?? 0,
+        });
+        await refreshServerState();
+        showToast('پرداخت شما با موفقیت ثبت شد. متشکریم از خرید شما.', 'success');
+        setUserView('account');
+      } else {
+        showToast(result.message || 'پرداخت معتبر نبود یا ناموفق شد.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'خطا در تایید پرداخت. لطفاً دوباره تلاش کنید.', 'error');
+    } finally {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  };
+
   useEffect(() => {
     refreshServerState();
+
+    const query = new URLSearchParams(window.location.search);
+    const paymentVerify = query.get('paymentVerify');
+    const authority = query.get('authority');
+    const status = query.get('status');
+
+    if (paymentVerify === '1' && authority && (status === 'OK' || status === 'FAIL')) {
+      handlePaymentRedirectVerification(authority, status as 'OK' | 'FAIL');
+    }
 
     // Attach global toast helper and replace blocky native alert dialog
     (window as any).showToast = showToast;
@@ -285,7 +323,7 @@ export default function App() {
           if (res.user.role === 'admin' || res.user.role === 'superadmin') {
             setCurrentView('admin');
           } else {
-            alert('حساب کاربری شما دسترسی مدیریت ندارد.');
+            showToast('حساب کاربری شما دسترسی مدیریت ندارد.', 'error');
             setCurrentView('shop');
             setUserView('home');
           }
@@ -341,9 +379,9 @@ export default function App() {
     try {
       await api.addProduct(newProd);
       await refreshServerState();
-      alert('زیورآلات با موفقیت به کاتالوگ فروشگاه افزوده شد.');
+      showToast('زیورآلات با موفقیت به کاتالوگ فروشگاه افزوده شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ثبت محصول.');
+      showToast(err.message || 'خطا در ثبت محصول.', 'error');
     }
   };
 
@@ -352,20 +390,26 @@ export default function App() {
       await api.editProduct(id, updatedFields);
       await refreshServerState();
     } catch (err: any) {
-      alert(err.message || 'خطا در ویرایش محصول.');
+      showToast(err.message || 'خطا در ویرایش محصول.', 'error');
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (confirm('آیا از حذف این زیورآلات از کاتالوگ فروشگاه اطمینان دارید؟')) {
-      try {
-        await api.deleteProduct(id);
-        await refreshServerState();
-        alert('محصول با موفقیت حذف گردید.');
-      } catch (err: any) {
-        alert(err.message || 'خطا در حذف محصول.');
+  const handleDeleteProduct = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف دائمی محصول از کاتالوگ',
+      message: 'آیا از حذف این زیورآلات از کاتالوگ فروشگاه اطمینان دارید؟',
+      onConfirm: async () => {
+        try {
+          await api.deleteProduct(id);
+          await refreshServerState();
+          showToast('محصول با موفقیت حذف گردید.', 'success');
+        } catch (err: any) {
+          showToast(err.message || 'خطا در حذف محصول.', 'error');
+        } finally {
+          setConfirmDialog(null);
+        }
       }
-    }
+    });
   };
 
   // Categories Actions
@@ -373,22 +417,28 @@ export default function App() {
     try {
       await api.addCategory(id, name);
       await refreshServerState();
-      alert('دسته‌بندی جدید ثبت شد.');
+      showToast('دسته‌بندی جدید ثبت شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ثبت دسته‌بندی.');
+      showToast(err.message || 'خطا در ثبت دسته‌بندی.', 'error');
     }
   };
 
-  const handleDeleteCategory = async (id: string) => {
-    if (confirm('آیا از حذف این دسته‌بندی اطمینان دارید؟')) {
-      try {
-        await api.deleteCategory(id);
-        await refreshServerState();
-        alert('دسته‌بندی حذف شد.');
-      } catch (err: any) {
-        alert(err.message || 'خطا در حذف دسته‌بندی.');
+  const handleDeleteCategory = (id: string) => {
+    setConfirmDialog({
+      title: 'حذف دسته‌بندی',
+      message: 'آیا از حذف این دسته‌بندی اطمینان دارید؟',
+      onConfirm: async () => {
+        try {
+          await api.deleteCategory(id);
+          await refreshServerState();
+          showToast('دسته‌بندی حذف شد.', 'success');
+        } catch (err: any) {
+          showToast(err.message || 'خطا در حذف دسته‌بندی.', 'error');
+        } finally {
+          setConfirmDialog(null);
+        }
       }
-    }
+    });
   };
 
   // User updates
@@ -398,8 +448,9 @@ export default function App() {
         await api.updateUser(id, updates);
       }
       await refreshServerState();
+      showToast('اطلاعات کاربر با موفقیت به‌روزرسانی شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در به‌روزرسانی کاربر.');
+      showToast(err.message || 'خطا در به‌روزرسانی کاربر.', 'error');
     }
   };
 
@@ -408,22 +459,28 @@ export default function App() {
     try {
       await api.addCoupon(coupon);
       await refreshServerState();
-      alert('کد تخفیف با موفقیت فعال شد.');
+      showToast('کد تخفیف با موفقیت فعال شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ایجاد کد تخفیف.');
+      showToast(err.message || 'خطا در ایجاد کد تخفیف.', 'error');
     }
   };
 
-  const handleDeleteCoupon = async (code: string) => {
-    if (confirm('آیا مایل به حذف این کد تخفیف هستید؟')) {
-      try {
-        await api.deleteCoupon(code);
-        await refreshServerState();
-        alert('کد تخفیف حذف گردید.');
-      } catch (err: any) {
-        alert(err.message || 'خطا در حذف تخفیف.');
+  const handleDeleteCoupon = (code: string) => {
+    setConfirmDialog({
+      title: 'حذف کد تخفیف',
+      message: 'آیا مایل به حذف این کد تخفیف هستید؟',
+      onConfirm: async () => {
+        try {
+          await api.deleteCoupon(code);
+          await refreshServerState();
+          showToast('کد تخفیف حذف گردید.', 'success');
+        } catch (err: any) {
+          showToast(err.message || 'خطا در حذف تخفیف.', 'error');
+        } finally {
+          setConfirmDialog(null);
+        }
       }
-    }
+    });
   };
 
   // CMS Updates
@@ -431,9 +488,9 @@ export default function App() {
     try {
       await api.updateCmsTexts(cms);
       setCmsTexts(cms);
-      alert('محتوای صفحات به‌روزرسانی شد.');
+      showToast('محتوای صفحات به‌روزرسانی شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ذخیره محتوا.');
+      showToast(err.message || 'خطا در ذخیره محتوا.', 'error');
     }
   };
 
@@ -442,9 +499,9 @@ export default function App() {
     try {
       await api.updateStoreSettings(settings);
       setStoreSettings(settings);
-      alert('تنظیمات فروشگاه ذخیره گردید.');
+      showToast('تنظیمات فروشگاه ذخیره گردید.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ذخیره تنظیمات.');
+      showToast(err.message || 'خطا در ذخیره تنظیمات.', 'error');
     }
   };
 
@@ -481,7 +538,7 @@ export default function App() {
   // Add to cart action
   const handleAddToCart = (product: Product, variant: string) => {
     if (product.stock === 0) {
-      alert('متأسفانه موجودی این محصول به اتمام رسیده است.');
+      showToast('متأسفانه موجودی این محصول به اتمام رسیده است.', 'error');
       return;
     }
 
@@ -492,7 +549,7 @@ export default function App() {
 
     if (existingIndex > -1) {
       if (updatedCart[existingIndex].quantity >= product.stock) {
-        alert(`متأسفانه امکان خرید بیشتر وجود ندارد. حداکثر موجودی محصول ${formatPersianNumber(product.stock)} عدد است.`);
+        showToast(`متأسفانه امکان خرید بیشتر وجود ندارد. حداکثر موجودی محصول ${formatPersianNumber(product.stock)} عدد است.`, 'error');
         return;
       }
       updatedCart[existingIndex].quantity += 1;
@@ -512,7 +569,7 @@ export default function App() {
         if (item.product.id === productId && item.selectedVariant === variant) {
           const newQty = item.quantity + change;
           if (newQty > item.product.stock) {
-            alert(`حداکثر موجودی این کالا در انبار ${formatPersianNumber(item.product.stock)} عدد می‌باشد.`);
+            showToast(`حداکثر موجودی این کالا در انبار ${formatPersianNumber(item.product.stock)} عدد می‌باشد.`, 'error');
             return item;
           }
           return { ...item, quantity: newQty };
@@ -537,47 +594,65 @@ export default function App() {
     try {
       await api.updateOrderStatus(id, status);
       await refreshServerState();
+      showToast('وضعیت سفارش با موفقیت به‌روزرسانی شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در تغییر وضعیت سفارش.');
+      showToast(err.message || 'خطا در تغییر وضعیت سفارش.', 'error');
     }
   };
 
   // Trigger Checkout Proceed (Launch Shaparak)
   const handleProceedToPayment = async (customerData: any) => {
+    if (cart.length === 0) {
+      showToast('سبد خرید شما خالی است. ابتدا محصولی به سبد اضافه کنید.', 'error');
+      return;
+    }
+
     // If not logged in, prompt they must login first to complete checkout
     if (!currentUser) {
       setAuthRedirectTarget('account');
       setAuthTab('login');
       setIsAuthOpen(true);
-      alert('لطفاً ابتدا وارد حساب کاربری خود شوید تا سفارش شما متصل شود.');
+      showToast('لطفاً ابتدا وارد حساب کاربری خود شوید تا سفارش شما متصل شود.', 'error');
       return;
     }
 
-    const subtotal = cart.reduce((sum, item) => {
-      const hasDiscount = item.product.discount && item.product.discount > 0;
-      const finalPrice = hasDiscount
-        ? item.product.price * (1 - (item.product.discount || 0) / 100)
-        : item.product.price;
-      return sum + finalPrice * item.quantity;
-    }, 0);
-    const shippingCost = subtotal >= 500000 ? 0 : storeSettings.shippingCost;
-    const finalAmount = subtotal + shippingCost;
+    const subtotal = getCartSubtotal(cart);
+    const couponCode = customerData.appliedCouponCode || null;
+    const matchedCoupon = couponCode
+      ? coupons.find((c) => c.code.toLowerCase() === couponCode.toLowerCase()) || null
+      : null;
+
+    const discountAmount = getCouponDiscount(subtotal, matchedCoupon);
+    const shippingMethod = customerData.shippingMethod || 'post';
+    const shippingCost = getShippingCost(subtotal, shippingMethod, storeSettings.shippingCost);
+    const taxAmount = getTaxAmount(subtotal, discountAmount, storeSettings.taxPercent);
+    const finalAmount = getCartTotal(subtotal, discountAmount, shippingCost, taxAmount);
 
     try {
-      const session = await api.createPaymentSession(finalAmount, null, cart, customerData);
+      const session = await api.createPaymentSession(finalAmount, couponCode, cart, {
+        ...customerData,
+        userId: currentUser?.id
+      });
+      setIsCartSidebarOpen(false);
+
+      if (session.paymentUrl) {
+        window.location.href = session.paymentUrl;
+        return;
+      }
+
       setActivePayment({
         isOpen: true,
-        amount: finalAmount,
+        amount: session.amount ?? finalAmount,
         authority: session.authority,
         customerData,
       });
     } catch (err: any) {
-      alert(err.message || 'خطا در راه‌اندازی درگاه پرداخت.');
+      showToast(err.message || 'خطا در راه‌اندازی درگاه پرداخت.', 'error');
     }
   };
 
   // Payment Webhook/Callback simulation Success Handler
-  const handlePaymentSuccess = async (trackingCode: string) => {
+  const handlePaymentSuccess = async () => {
     if (!activePayment) return;
 
     try {
@@ -585,18 +660,20 @@ export default function App() {
       if (result.status === 'success') {
         saveCartToStorage([]); // Clear cart
         setSuccessOrder({
-          trackingCode: trackingCode,
+          trackingCode: result.order?.trackingCode || activePayment.authority,
           customerName: activePayment.customerData.name,
-          totalAmount: activePayment.amount,
+          totalAmount: result.order?.totalPrice ?? activePayment.amount,
         });
+        showToast('پرداخت شما با موفقیت ثبت شد. فاکتور سفارش به حساب کاربری منتقل شد.', 'success');
+        setUserView('account');
 
         // Pull updated stocks and orders from backend
         await refreshServerState();
       } else {
-        alert(result.message || 'خطا در تایید تراکنش درگاه بانکی.');
+        showToast(result.message || 'خطا در تایید تراکنش درگاه بانکی.', 'error');
       }
     } catch (err: any) {
-      alert(err.message || 'خطا در برقراری ارتباط با وب‌سرویس بانک.');
+      showToast(err.message || 'خطا در برقراری ارتباط با وب‌سرویس بانک.', 'error');
     } finally {
       setActivePayment(null);
     }
@@ -612,7 +689,7 @@ export default function App() {
       }
     }
     setActivePayment(null);
-    alert('تراکنش پرداخت توسط کاربر لغو گردید. کالاها کماکان در سبد خرید شما در دسترس است.');
+    showToast('تراکنش پرداخت توسط کاربر لغو گردید. کالاها کماکان در سبد خرید شما در دسترس است.', 'info');
   };
 
   // Navigation Routing Safety
@@ -650,7 +727,7 @@ export default function App() {
         cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)}
         onCartClick={() => {
           setCurrentView('shop');
-          setUserView('cart');
+          setIsCartSidebarOpen(true);
         }}
         onAdminClick={handleAdminPanelToggle}
         onHomeClick={() => {
@@ -684,9 +761,18 @@ export default function App() {
         onAccountClick={handleAccountViewToggle}
         onLogout={handleLogout}
       />
-
-      {/* CORE CONTENT ROUTER */}
       <main className="flex-1">
+        <CartSidebar
+          isOpen={isCartSidebarOpen}
+          onClose={() => setIsCartSidebarOpen(false)}
+          cartItems={cart}
+          coupons={coupons}
+          onUpdateQuantity={handleUpdateQuantity}
+          onRemoveItem={handleRemoveItem}
+          onProceedToPayment={handleProceedToPayment}
+          shippingCostSetting={storeSettings.shippingCost}
+          taxPercent={storeSettings.taxPercent}
+        />
         <AnimatePresence mode="wait">
           
           {/* VIEW 1: SHOPPING CLIENT APP */}
@@ -739,6 +825,7 @@ export default function App() {
                   setIsAuthOpen(true);
                 }}
                 onLogout={handleLogout}
+                showToast={showToast}
                 cms={cmsTexts}
                 categories={categories as any[]}
               />
@@ -1042,6 +1129,10 @@ export default function App() {
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        <ConfirmModal confirmDialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
       </AnimatePresence>
 
       {/* GLOBAL BEAUTIFIED TOAST NOTIFICATION CONTAINER */}

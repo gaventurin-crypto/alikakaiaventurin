@@ -6,7 +6,7 @@ import { formatPersianPrice, formatPersianNumber } from './ProductCard';
 interface PaymentGatewayProps {
   amount: number;
   merchantName: string;
-  onPaymentSuccess: (trackingCode: string) => void;
+  onPaymentSuccess: () => void;
   onPaymentCancel: () => void;
 }
 
@@ -127,7 +127,7 @@ export default function PaymentGateway({
   };
 
   const handleFinalizeSuccess = () => {
-    onPaymentSuccess(receiptTracking);
+    onPaymentSuccess();
   };
 
   return (

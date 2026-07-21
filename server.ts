@@ -511,21 +511,14 @@ app.get('/api/orders', authenticateToken, async (req: AuthRequest, res) => {
     if (!req.user) return;
     const ordersList = await dbService.getOrders();
 
-    // If Admin, they can access all. If user, only their own (by phone or email matching)
-    if (req.user.role === 'admin') {
+    // Admin or SuperAdmin can access all orders
+    if (req.user.role === 'admin' || req.user.role === 'superadmin') {
       res.json(ordersList);
-    } else {
-      const userObj = await dbService.getUserById(req.user.id);
-      if (!userObj) {
-        res.status(404).json({ message: 'کاربر یافت نشد.' });
-        return;
-      }
-      // Filter orders by phone or customer Name or email matching
-      const userOrders = ordersList.filter(
-        (o) => o.customerPhone === req.user?.email || o.customerName === userObj.name
-      );
-      res.json(userOrders);
+      return;
     }
+
+    const userOrders = ordersList.filter((o) => o.userId === req.user?.id);
+    res.json(userOrders);
   } catch (err: any) {
     res.status(500).json({ message: 'خطا در دریافت لیست سفارشات.' });
   }
@@ -790,29 +783,77 @@ app.put('/api/admin/tickets/:id/status', authenticateToken, isAdmin, async (req,
 // ================= ZARINPAL IRANIAN PAYMENT GATEWAY INTEGRATION =================
 
 // Initiates a payment session
-app.post('/api/payment/create', async (req, res) => {
+app.post('/api/payment/create', authenticateToken, async (req: AuthRequest, res) => {
   try {
     const { amount, couponCode, items, customerData } = req.body;
 
-    if (!amount || !customerData || !items) {
+    if (!amount || !customerData || !items || !Array.isArray(items) || items.length === 0) {
       res.status(400).json({ message: 'اطلاعات فاکتور ناقص است.' });
       return;
     }
 
-    const orderId = 'ord-' + Math.floor(100000 + Math.random() * 900000).toString();
+    if (!req.user) {
+      res.status(401).json({ message: 'دسترسی غیرمجاز: کاربر لاگین نشده است.' });
+      return;
+    }
 
-    // 1. Initialize Zarinpal Payment Session via Abstract PaymentService
+    const storeSettings = await dbService.getStoreSettings();
+    const subtotal = items.reduce((sum: number, item: any) => {
+      const itemPrice = item.product.price * (1 - (item.product.discount || 0) / 100);
+      return sum + itemPrice * item.quantity;
+    }, 0);
+
+    let discountAmount = 0;
+    let validCoupon: Coupon | null = null;
+
+    if (couponCode) {
+      validCoupon = await dbService.getCouponByCode(couponCode);
+      if (!validCoupon) {
+        res.status(400).json({ message: 'کد تخفیف معتبر نمی‌باشد.' });
+        return;
+      }
+
+      const now = new Date();
+      const expiry = new Date(validCoupon.expiryDate);
+      if (now > expiry) {
+        res.status(400).json({ message: 'اعتبار این کد تخفیف به اتمام رسیده است.' });
+        return;
+      }
+      if (validCoupon.usageCount >= validCoupon.usageLimit) {
+        res.status(400).json({ message: 'ظرفیت استفاده از این کد تخفیف به پایان رسیده است.' });
+        return;
+      }
+
+      discountAmount = validCoupon.type === 'percent'
+        ? Math.floor((subtotal * validCoupon.value) / 100)
+        : validCoupon.value;
+    }
+
+    const shippingMethod = customerData.shippingMethod || 'post';
+    const shippingCost = subtotal >= 500000
+      ? 0
+      : shippingMethod === 'express'
+        ? Math.round(storeSettings.shippingCost * 1.5)
+        : storeSettings.shippingCost;
+    const taxAmount = Math.round(Math.max(subtotal - discountAmount, 0) * (storeSettings.taxPercent / 100));
+    const finalAmount = Math.max(subtotal - discountAmount + shippingCost + taxAmount, 0);
+
+    if (finalAmount !== amount) {
+      console.warn(`Client amount mismatch: expected ${finalAmount}, received ${amount}. Using server-calculated amount.`);
+    }
+
+    const orderId = 'ord-' + Math.floor(100000 + Math.random() * 900000).toString();
     const description = `خرید آنلاین گالری زیورآلات آونتورین - سفارش #${orderId}`;
-    const paymentResponse = await paymentService.requestPayment(amount, orderId, description);
+    const paymentResponse = await paymentService.requestPayment(finalAmount, orderId, description);
 
     if (!paymentResponse.success) {
       res.status(500).json({ message: 'خطا در راه‌اندازی درگاه پرداخت زرین‌پال.' });
       return;
     }
 
-    // 2. Create a pending Order first in DB
     const pendingOrder: Order = {
       id: orderId,
+      userId: req.user.id,
       customerName: customerData.name,
       customerPhone: customerData.phone,
       province: customerData.province,
@@ -826,23 +867,25 @@ app.post('/api/payment/create', async (req, res) => {
         price: item.product.price * (1 - (item.product.discount || 0) / 100),
         variant: item.selectedVariant,
       })),
-      totalPrice: amount,
+      totalPrice: finalAmount,
+      discountAmount,
+      shippingCost,
+      tax: taxAmount,
+      couponCode: validCoupon?.code || undefined,
       paymentStatus: 'pending',
       trackingCode: paymentResponse.authority,
+      shippingMethod,
       date: new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' }).format(new Date()),
     };
 
     await dbService.addOrder(pendingOrder);
 
-    // If coupon code was used, increment usage count
-    if (couponCode) {
-      await dbService.incrementCouponUsage(couponCode);
-    }
-
     res.json({
       authority: paymentResponse.authority,
       paymentUrl: paymentResponse.paymentUrl,
       orderId: pendingOrder.id,
+      amount: finalAmount,
+      couponCode: pendingOrder.couponCode,
     });
   } catch (err: any) {
     res.status(500).json({ message: 'خطا در برقراری ارتباط با درگاه پرداخت: ' + err.message });
@@ -865,13 +908,15 @@ app.post('/api/payment/verify', async (req, res) => {
       return;
     }
 
+    let updatedOrder: Order | null = order;
+
     if (status === 'OK') {
       // 1. Verify via abstraction PaymentService (Production API check if real, or simulator check if ZP-*)
       const verification = await paymentService.verifyPayment(authority, order.totalPrice);
 
       if (verification.success) {
-        // Update Order Status to success
-        await dbService.updateOrderStatus(order.id, 'success');
+        // Update Order Status to success and return the fresh order object
+        updatedOrder = await dbService.updateOrderStatus(order.id, 'success') || order;
 
         // Decrease product stocks accordingly
         for (const item of order.items) {
@@ -895,14 +940,18 @@ app.post('/api/payment/verify', async (req, res) => {
           }
         }
 
-        res.json({ status: 'success', order, trackingCode: authority, refId: verification.refId });
+        if (order.couponCode) {
+          await dbService.incrementCouponUsage(order.couponCode);
+        }
+
+        res.json({ status: 'success', order: updatedOrder, trackingCode: authority, refId: verification.refId });
       } else {
-        await dbService.updateOrderStatus(order.id, 'failed');
-        res.status(400).json({ status: 'failed', message: verification.message });
+        updatedOrder = await dbService.updateOrderStatus(order.id, 'failed') || order;
+        res.status(400).json({ status: 'failed', message: verification.message, order: updatedOrder });
       }
     } else {
-      await dbService.updateOrderStatus(order.id, 'failed');
-      res.json({ status: 'failed', message: 'پرداخت توسط کاربر لغو شد یا ناموفق بود.' });
+      updatedOrder = await dbService.updateOrderStatus(order.id, 'failed') || order;
+      res.json({ status: 'failed', message: 'پرداخت توسط کاربر لغو شد یا ناموفق بود.', order: updatedOrder });
     }
   } catch (err: any) {
     res.status(500).json({ message: 'خطا در تایید وضعیت پرداخت تراکنش: ' + err.message });

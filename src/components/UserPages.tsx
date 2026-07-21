@@ -11,6 +11,7 @@ import { formatPersianPrice, formatPersianNumber } from './ProductCard';
 import { PROVINCES } from '../data';
 import HandmadesView from './HandmadesView';
 import { api } from '../lib/api';
+import { getCartSubtotal, getCouponDiscount, getShippingCost, getTaxAmount, getCartTotal } from '../lib/checkoutUtils';
 
 interface UserPagesProps {
   products: Product[];
@@ -58,6 +59,7 @@ interface UserPagesProps {
   currentUser?: any;
   onAuthRequired?: (target: 'account' | 'handmades') => void;
   onLogout?: () => void;
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   
   // CMS and categories props
   cms?: CMSTexts;
@@ -92,6 +94,7 @@ export default function UserPages({
   currentUser,
   onAuthRequired,
   onLogout,
+  showToast,
   cms,
   categories = [],
 }: UserPagesProps) {
@@ -164,15 +167,16 @@ export default function UserPages({
       fetchTicketChat(activeTicketId);
       // Refresh tickets to update updatedAt date/status
       fetchMyTickets();
+      showToast('پیام شما با موفقیت ارسال شد.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ارسال پیام.');
+      showToast(err.message || 'خطا در ارسال پیام.', 'error');
     }
   };
 
   const handleCreateNewTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTicketSubject.trim() || !newTicketMessage.trim()) {
-      alert('لطفاً همه فیلدهای تیکت را پر کنید.');
+      showToast('لطفاً همه فیلدهای تیکت را پر کنید.', 'error');
       return;
     }
     setIsCreatingTicket(true);
@@ -186,9 +190,9 @@ export default function UserPages({
       setNewTicketMessage('');
       setTicketTab('list');
       fetchMyTickets();
-      alert('تیکت پشتیبانی شما با موفقیت ثبت شد و به زودی همکاران ما پاسخگو خواهند بود.');
+      showToast('تیکت پشتیبانی شما با موفقیت ثبت شد و به زودی همکاران ما پاسخگو خواهند بود.', 'success');
     } catch (err: any) {
-      alert(err.message || 'خطا در ثبت تیکت جدید.');
+      showToast(err.message || 'خطا در ثبت تیکت جدید.', 'error');
     } finally {
       setIsCreatingTicket(false);
     }
@@ -218,6 +222,7 @@ export default function UserPages({
   const [couponInput, setCouponInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   const [couponError, setCouponError] = useState('');
+  const [isCouponLoading, setIsCouponLoading] = useState(false);
 
   // Checkout Form State (Full screen Cart/Checkout option)
   const [checkoutName, setCheckoutName] = useState(profile.name || '');
@@ -277,54 +282,32 @@ export default function UserPages({
   });
 
   // Calculate cart metrics
-  const cartSubtotal = cart.reduce((sum, item) => {
-    const hasDiscount = item.product.discount && item.product.discount > 0;
-    const finalPrice = hasDiscount
-      ? item.product.price * (1 - (item.product.discount || 0) / 100)
-      : item.product.price;
-    return sum + finalPrice * item.quantity;
-  }, 0);
+  const cartSubtotal = getCartSubtotal(cart);
+  const discountAmount = getCouponDiscount(cartSubtotal, appliedCoupon);
+  const shippingCost = getShippingCost(cartSubtotal, checkoutShippingMethod, shippingCostSetting);
+  const taxAmount = getTaxAmount(cartSubtotal, discountAmount, taxPercent);
+  const cartTotal = getCartTotal(cartSubtotal, discountAmount, shippingCost, taxAmount);
 
-  // Apply Coupon Discount Calculation
-  let discountAmount = 0;
-  if (appliedCoupon) {
-    if (appliedCoupon.type === 'percent') {
-      discountAmount = (cartSubtotal * appliedCoupon.value) / 100;
-    } else {
-      discountAmount = appliedCoupon.value;
-    }
-  }
-
-  const shippingCost = cartSubtotal >= 500000 || cartSubtotal === 0 ? 0 : shippingCostSetting;
-  const taxAmount = (cartSubtotal - discountAmount) * (taxPercent / 100);
-  const cartTotal = Math.max(cartSubtotal - discountAmount + shippingCost + taxAmount, 0);
-
-  const handleApplyCoupon = (e: React.FormEvent) => {
+  const handleApplyCoupon = async (e: React.FormEvent) => {
     e.preventDefault();
     setCouponError('');
-    const matched = coupons.find(c => c.code.toLowerCase() === couponInput.trim().toLowerCase());
-    if (!matched) {
-      setCouponError('کد تخفیف وارد شده معتبر نمی‌باشد.');
-      setAppliedCoupon(null);
-      return;
-    }
-    
-    // Check expiry
-    const exp = new Date(matched.expiryDate);
-    if (exp < new Date()) {
-      setCouponError('مهلت استفاده از این کد تخفیف به پایان رسیده است.');
-      setAppliedCoupon(null);
+    const code = couponInput.trim().toUpperCase();
+    if (!code) {
+      setCouponError('لطفاً ابتدا کد تخفیف را وارد کنید.');
       return;
     }
 
-    if (matched.usageCount >= matched.usageLimit) {
-      setCouponError('سقف استفاده از این کد تخفیف تکمیل شده است.');
+    setIsCouponLoading(true);
+    try {
+      const validated = await api.validateCoupon(code);
+      setAppliedCoupon(validated);
+      setCouponInput('');
+    } catch (err: any) {
+      setCouponError(err?.message || 'کد تخفیف وارد شده معتبر نمی‌باشد.');
       setAppliedCoupon(null);
-      return;
+    } finally {
+      setIsCouponLoading(false);
     }
-
-    setAppliedCoupon(matched);
-    setCouponInput('');
   };
 
   const handleRemoveCoupon = () => {
@@ -376,6 +359,11 @@ export default function UserPages({
     e.preventDefault();
     setCheckoutError('');
 
+    if (cart.length === 0) {
+      setCheckoutError('سبد خرید خالی است. ابتدا کالاهایی را به سبد اضافه کنید.');
+      return;
+    }
+
     if (!checkoutName || !checkoutPhone || !checkoutProvince || !checkoutCity || !checkoutPostalCode || !checkoutAddress) {
       setCheckoutError('لطفاً تمامی فیلدهای الزامی ستاره‌دار آدرس گیرنده را پر فرمایید.');
       return;
@@ -401,7 +389,6 @@ export default function UserPages({
       address: checkoutAddress,
       shippingMethod: checkoutShippingMethod,
       appliedCouponCode: appliedCoupon?.code || undefined,
-      discountValue: discountAmount
     });
   };
 
@@ -1431,9 +1418,10 @@ export default function UserPages({
                       />
                       <button
                         type="submit"
-                        className="rounded-xl bg-gold-500 text-slate-950 font-bold px-4 py-2 text-xs hover:bg-gold-400 transition-all cursor-pointer"
+                        disabled={isCouponLoading}
+                        className="rounded-xl bg-gold-500 text-slate-950 font-bold px-4 py-2 text-xs hover:bg-gold-400 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        اعمال
+                        {isCouponLoading ? 'در حال بررسی...' : 'اعمال'}
                       </button>
                     </div>
                     {couponError && <p className="text-[10px] text-rose-500 text-right">{couponError}</p>}
@@ -1976,20 +1964,36 @@ export default function UserPages({
                                 ))}
                               </div>
 
-                              <div className="flex justify-between items-center pt-1 text-[10px]">
-                                <div className="flex items-center gap-1 font-en-nums">
+                              <div className="space-y-2 pt-1 text-[10px]">
+                                <div className="flex justify-between font-en-nums">
                                   <span className="text-slate-500">مجموع تراکنش:</span>
                                   <span className="font-bold text-slate-200">{formatPersianPrice(o.totalPrice)}</span>
                                 </div>
-                                
-                                <span className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold ${
-                                  o.paymentStatus === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                  o.paymentStatus === 'pending' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                                  'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                                }`}>
-                                  {o.paymentStatus === 'success' ? '✓ پرداخت موفق - آماده ارسال پستی' :
-                                   o.paymentStatus === 'pending' ? '● در انتظار تایید مالی' : '✕ لغو شده / ناموفق'}
-                                </span>
+                                {o.couponCode && (
+                                  <div className="flex justify-between text-emerald-300">
+                                    <span>کد تخفیف اعمال شده:</span>
+                                    <span className="font-bold text-slate-200">{o.couponCode}</span>
+                                  </div>
+                                )}
+                                <div className="flex justify-between text-slate-400">
+                                  <span>هزینه ارسال:</span>
+                                  <span className="font-bold text-slate-200 font-en-nums">{o.shippingCost ? formatPersianPrice(o.shippingCost) : 'ارسال رایگان'}</span>
+                                </div>
+                                <div className="flex justify-between text-slate-400">
+                                  <span>مالیات:</span>
+                                  <span className="font-bold text-slate-200 font-en-nums">{o.tax ? formatPersianPrice(o.tax) : formatPersianPrice(0)}</span>
+                                </div>
+                                <div className="flex justify-between items-center font-en-nums">
+                                  <span className="text-slate-500">وضعیت پرداخت:</span>
+                                  <span className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold ${
+                                    o.paymentStatus === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                    o.paymentStatus === 'pending' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                                    'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                  }`}>
+                                    {o.paymentStatus === 'success' ? '✓ پرداخت موفق - آماده ارسال پستی' :
+                                     o.paymentStatus === 'pending' ? '● در انتظار تایید مالی' : '✕ لغو شده / ناموفق'}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           ))}
